@@ -112,16 +112,21 @@ class _MessageRow extends StatelessWidget {
     );
     final bubble = Flexible(child: _Bubble(message));
 
+    // 原型`.message { max-width: 760px; margin: 0 auto 20px }`：
+    // 消息行整体作为一个 760px 的块居中，块内再决定气泡靠左还是靠右。
     return Container(
-      constraints: const BoxConstraints(maxWidth: 760),
       margin: const EdgeInsets.only(bottom: 20),
-      child: Row(
-        mainAxisAlignment:
-            message.isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: message.isUser
-            ? [bubble, const SizedBox(width: 10), avatar]
-            : [avatar, const SizedBox(width: 10), bubble],
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 760),
+        child: Row(
+          mainAxisAlignment:
+              message.isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: message.isUser
+              ? [bubble, const SizedBox(width: 10), avatar]
+              : [avatar, const SizedBox(width: 10), bubble],
+        ),
       ),
     );
   }

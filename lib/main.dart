@@ -2,10 +2,43 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'design/tokens.dart';
+import 'models/workspace_models.dart';
 import 'pages/prototype_page.dart';
+import 'state/workbench_providers.dart';
 
 void main() {
-  runApp(const ProviderScope(child: JavisApp()));
+  runApp(
+    ProviderScope(
+      overrides: [
+        // 支持用 `?view=knowledge&platform=windows` 直接打开指定状态。
+        // 方便设计走查和评审时把链接指到具体页面，也便于自动截图。
+        if (_initialView() case final view?)
+          activeViewProvider.overrideWith((ref) => view),
+        if (_initialPlatform() case final platform?)
+          platformStyleProvider.overrideWith((ref) => platform),
+      ],
+      child: const JavisApp(),
+    ),
+  );
+}
+
+/// 从启动 URL 里读初始视图。桌面端没有 query string时返回 null。
+WorkbenchView? _initialView() {
+  final name = Uri.base.queryParameters['view'];
+  if (name == null) return null;
+  for (final view in WorkbenchView.values) {
+    if (view.name == name) return view;
+  }
+  return null;
+}
+
+/// 从启动 URL 里读窗口外观。取值 `macos` / `windows`。
+DesktopPlatformStyle? _initialPlatform() {
+  return switch (Uri.base.queryParameters['platform']) {
+    'windows' => DesktopPlatformStyle.windows,
+    'macos' => DesktopPlatformStyle.macOS,
+    _ => null,
+  };
 }
 
 /// FirstMate 桌面工作台。

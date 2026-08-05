@@ -41,6 +41,18 @@ flutter create --platforms=web .
 flutter run -d chrome
 ```
 
+### 直接跳到某个页面
+
+支持 URL 参数指定初始状态，评审和走查时把链接直接指到具体页面：
+
+```
+?view=knowledge             打开知识工作区
+?platform=windows           用 Windows 窗口外观
+?view=git&platform=windows  两个一起用
+```
+
+`view` 取值：`chat` / `knowledge` / `library` / `agents` / `models` / `git`
+
 ## 测试
 
 ```bash
