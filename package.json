@@ -1,0 +1,15 @@
+{
+  "name": "javis",
+  "version": "0.2.0",
+  "description": "FirstMate — 文件优先、模型可插拔、知识可版本化的本地 Agent 工作台。",
+  "main": "src/main.cjs",
+  "type": "commonjs",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "check": "node --check src/main.cjs && node --check src/preload.cjs && node --check src/renderer.js"
+  },
+  "devDependencies": {
+    "electron": "^32.2.6"
+  }
+}

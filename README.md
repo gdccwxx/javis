@@ -1,109 +1,39 @@
 # javis
 
-FirstMate 桌面工作台的 Flutter 实现。
+FirstMate 的 Flutter 跨端工作台实现。应用不内置模型：用户配置外部 API，知识、船员定义、任务和产物保持为本地工作区文件，Git 负责版本化。
 
-一个不内置任何模型的跨平台 Agent 工作台：应用只负责对话界面、任务编排、文件读写、Git 版本管理和运行状态展示，模型由用户通过 API 配置接入。
+## 本次重写
 
-文档在 [gdccwxx/javis-wiki](https://github.com/gdccwxx/javis-wiki)。
+根据 `PRD_FirstMate_Mobile.md` 和 `FirstMate_Desktop_Prototype.html` 重新实现界面层，旧 `lib/` 与 `test/` 代码已移除。
 
-## 当前进度
+- **移动端**：对话优先，抽屉承载完整导航，底部导航提供对话/知识/素材/设置的高频入口。
+- **桌面端**：复刻原型的 AppBar + 侧栏 + 主工作区 + 任务检查器三栏结构；1050px 以下隐藏检查器。
+- **功能页面**：大副对话、知识工作区、用户素材库、任务看板、Agent 配置、模型连接、Git 变更、设置。
+- **安全边界**：模型页只显示钥匙串凭证引用；不在 UI 演示数据或配置样例中保留明文密钥。
+- **当前状态**：这是可交互的 UI 骨架，数据仍由 `lib/data/demo_data.dart` 提供；文件读写、Git、Agent Runtime 与真实 API 连接器待接入。
 
-界面层已完成，按 `FirstMate_Desktop_Prototype.html` 做的像素级还原。六个视图全部可用：
-
-| 视图 | 状态 |
-|------|------|
-| 大副对话 | 消息流、任务卡片、引用来源、可发送消息 |
-| 知识工作区 | 文件树（可筛选、可选中）+ 文档正文 |
-| 用户素材库 | 卡片网格、可搜索、响应式列数 |
-| Agent 配置 | 船员定义卡片、frontmatter 预览 |
-| 模型连接 | 表格、钥匙串引用、YAML 示例 |
-| Git 变更 | 变更统计、diff 列表、文件勾选、提交框 |
-
-数据来自 `lib/data/demo_data.dart`。文件读写层、Agent Runtime、模型连接器还没实现。
-
-## 跑起来
+## 运行与验证
 
 ```bash
-flutter pub get
-flutter run -d macos     # 或 windows / linux
+/Users/dechenguo/dev/flutter/bin/flutter pub get
+/Users/dechenguo/dev/flutter/bin/flutter run -d chrome
+/Users/dechenguo/dev/flutter/bin/flutter analyze
+/Users/dechenguo/dev/flutter/bin/flutter test
 ```
 
-平台目录没入库，第一次跑之前需要生成：
+可用 `?view=knowledge` 直接进入指定页面。可选值：`chat`、`knowledge`、`library`、`agents`、`models`、`git`、`settings`。
 
-```bash
-flutter create --platforms=macos,windows,linux .
-```
+## 结构
 
-macOS 需要装Xcode（`flutter build macos` 依赖 `xcodebuild`）。只想看界面的话用 Web 更快：
-
-```bash
-flutter create --platforms=web .
-flutter run -d chrome
-```
-
-### 直接跳到某个页面
-
-支持 URL 参数指定初始状态，评审和走查时把链接直接指到具体页面：
-
-```
-?view=knowledge             打开知识工作区
-?platform=windows           用 Windows 窗口外观
-?view=git&platform=windows  两个一起用
-```
-
-`view` 取值：`chat` / `knowledge` / `library` / `agents` / `models` / `git`
-
-## 测试
-
-```bash
-flutter test
-flutter analyze
-```
-
-如果本机开了代理，`flutter test` 会因为 WebSocket 被拦而失败，需要：
-
-```bash
-unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
-export NO_PROXY="localhost,127.0.0.1,::1" no_proxy="localhost,127.0.0.1,::1"
-flutter test
-```
-
-## 目录
-
-```
+```text
 lib/
-├── main.dart                 入口
-├── design/tokens.dart        色板、字号、圆角、布局常量
-├── models/                   数据模型（对应工作区文件形态）
-├── data/demo_data.dart       演示数据
-├── state/                    Riverpod providers
-├── widgets/                  基础组件 + 导航图标 painter
-├── shell/                    AppBar / Sidebar / Inspector / Shell
-├── views/                    六个主视图
-└── pages/prototype_page.dart 演示壳（平台切换 + 圆角窗口）
+├── design/tokens.dart          原型 CSS 对应的颜色、间距与断点
+├── models/workspace_models.dart
+├── data/demo_data.dart         可替换的演示数据源
+├── state/workbench_providers.dart
+├── widgets/ui.dart             通用卡片、页头、状态标签与按钮
+├── shell/workbench_shell.dart  移动/桌面自适应应用壳
+└── views/workbench_views.dart  对话、知识、素材、任务、配置、模型、Git、设置
 ```
 
-分层职责和实现取舍见 wiki 的 [architecture.md](https://github.com/gdccwxx/javis-wiki/blob/main/architecture.md)。
-
-## 几个约定
-
-**颜色只从 `AppColors` 取。** 视图代码里不写裸色值。设计稿改了就改 `tokens.dart`，视图不动。
-
-**密钥永不落到配置文件。** `models/*.yaml` 只写钥匙串引用。这条有测试锁着。
-
-**派生状态用 `Provider` 算，不在 build 里过滤。** 筛选逻辑能单独测。
-
-**保持 `flutter analyze` 零告警。**
-
-## 接下来
-
-按优先级：
-
-1. 工作区文件读写（替换 `demo_data.dart`，UI 结构不动）
-2. Git 封装（status / diff / commit / rollback）
-3. 模型连接器（OpenAI-compatible + 连通性测试）
-4. Agent Runtime（任务拆解、船员调度、产物归档）
-5. 钥匙串读写
-6. 设置页
-
-有几个问题得先确认才好动手，列在 wiki 的 [open-questions.md](https://github.com/gdccwxx/javis-wiki/blob/main/open-questions.md)。
+设计与架构文档沉淀在 [javis-wiki](https://github.com/gdccwxx/javis-wiki)。
