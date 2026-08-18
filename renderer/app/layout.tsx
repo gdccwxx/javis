@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./supervision.css";
+import "./calibration.css";
 import Shell from "@/app/shell";
 
 export const metadata: Metadata = {

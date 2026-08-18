@@ -33,5 +33,5 @@ export function CardGrid({ type }: { type: "agents" | "skills" | "archive" }) {
     ["RESTORE", "恢复指针", "下次启动会优先读取当前工作区的未完成任务、未提交 Git 变更和最近上下文摘要。", "DRAFT", "sessions/summaries/current-context.md", "updated now", "workspace state"],
   ];
   const cards = type === "agents" ? agents : type === "skills" ? skills : archive;
-  return <div className="grid">{cards.map((card) => <article className="card" key={card[1]}><div className="card-top"><span className="kind">{card[0]}</span><Status value={type === "skills" ? "ENABLED" : card[3]} /></div><h3>{card[1]}</h3><p>{card[2]}</p><div className="card-foot"><span className="tag primary">{card[4]}</span><span className="tag">{card[5]}</span><span className="tag path">{card[6]}</span></div></article>)}</div>;
+  return <div className="grid">{cards.map((card) => <article className="card" key={card[1]}><div className="card-top"><span className="kind">{card[0]}</span><Status value={type === "skills" ? "ENABLED" : card[3]} /></div><h3>{card[1]}</h3><p>{card[2]}</p>{type === "agents" && card[3] === "RUNNING" && <div className="handoff"><span>回报保障：等待回报</span><span>预计 20:40</span></div>}<div className="card-foot"><span className="tag primary">{card[4]}</span><span className="tag">{card[5]}</span><span className="tag path">{card[6]}</span></div></article>)}</div>;
 }

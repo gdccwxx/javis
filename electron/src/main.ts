@@ -1,6 +1,12 @@
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, net, protocol } from "electron";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, normalize, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+
+protocol.registerSchemesAsPrivileged([{
+  scheme: "firstmate",
+  privileges: { standard: true, secure: true, supportFetchAPI: true },
+}]);
 
 let mainWindow: BrowserWindow | null = null;
 let workspaceRoot: string | null = null;
@@ -25,6 +31,26 @@ function workspaceSnapshot() {
   return { name: basename(workspaceRoot), files };
 }
 
+function registerRendererProtocol() {
+  const outputRoot = resolve(__dirname, "../../renderer/out");
+
+  protocol.handle("firstmate", (request) => {
+    const url = new URL(request.url);
+    const requestedPath = decodeURIComponent(url.pathname);
+    const assetPath = requestedPath === "/" || requestedPath.endsWith("/")
+      ? `${requestedPath}index.html`
+      : requestedPath;
+    const filePath = resolve(outputRoot, `.${assetPath}`);
+    const pathFromRoot = relative(outputRoot, filePath);
+
+    if (pathFromRoot.startsWith("..") || pathFromRoot === "") {
+      return new Response("Not found", { status: 404 });
+    }
+
+    return net.fetch(pathToFileURL(filePath).toString());
+  });
+}
+
 async function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -32,7 +58,7 @@ async function createWindow() {
     minWidth: 1060,
     minHeight: 720,
     title: "FirstMate",
-    backgroundColor: "#f5f6f8",
+    backgroundColor: "#101010",
     webPreferences: {
       preload: resolve(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -43,7 +69,7 @@ async function createWindow() {
 
   const devUrl = process.env.FIRSTMATE_RENDERER_URL;
   if (devUrl) await mainWindow.loadURL(devUrl);
-  else await mainWindow.loadFile(resolve(__dirname, "../../renderer/out/index.html"));
+  else await mainWindow.loadURL("firstmate://app/chat/");
 }
 
 ipcMain.handle("workspace:choose", async () => {
@@ -61,6 +87,7 @@ ipcMain.handle("workspace:read", (_event, relativePath: string) => {
 });
 
 app.whenReady().then(async () => {
+  registerRendererProtocol();
   await createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) void createWindow();
