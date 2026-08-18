@@ -1,0 +1,22 @@
+{
+  "name": "electron",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "FirstMate Desktop Electron 壳：主进程服务层与 preload 特权边界",
+  "main": "dist/main.cjs",
+  "scripts": {
+    "dev": "node build.mjs && electron .",
+    "build": "node build.mjs",
+    "start": "electron .",
+    "typecheck": "tsc --noEmit",
+    "clean": "rimraf dist"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "electron": "^33.3.1",
+    "esbuild": "^0.24.2",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.7.2"
+  }
+}

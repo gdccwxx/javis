@@ -1,15 +1,18 @@
 {
   "name": "javis",
   "version": "0.2.0",
+  "private": true,
   "description": "FirstMate — 文件优先、模型可插拔、知识可版本化的本地 Agent 工作台。",
-  "main": "src/main.cjs",
-  "type": "commonjs",
+  "main": "electron/dist/main.cjs",
   "scripts": {
-    "start": "electron .",
-    "dev": "electron .",
-    "check": "node --check src/main.cjs && node --check src/preload.cjs && node --check src/renderer.js"
+    "dev": "pnpm --filter electron build && electron electron/",
+    "start": "pnpm --filter electron start",
+    "build": "pnpm --filter renderer build && pnpm --filter electron build",
+    "typecheck": "pnpm -r typecheck"
   },
-  "devDependencies": {
-    "electron": "^32.2.6"
-  }
+  "workspaces": [
+    "electron",
+    "renderer"
+  ],
+  "packageManager": "pnpm@10.9.7"
 }

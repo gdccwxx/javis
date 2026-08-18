@@ -1,33 +1,19 @@
-# Flutter / Dart
-.dart_tool/
-.packages
-.pub-cache/
-.pub/
-build/
-pubspec.lock
+# 依赖与构建产物
+node_modules/
+dist/
+out/
+.next/
+tsconfig.tsbuildinfo
 
-# IDE
-.idea/
-.vscode/
-*.iml
-*.iws
-
-# 平台生成目录（用 flutter create 重新生成）
-android/
-ios/
-linux/
-macos/
-windows/
-web/
-
-# 系统文件
+# 日志与系统文件
+*.log
 .DS_Store
 
-# 本地截图产物
-.screenshots/
-
 # 密钥绝不入库—— 对应 PRD F2 的硬约束
-*.env
+.env
 .env.*
 **/secrets.yaml
 **/credentials.json
+
+# 本地截图产物
+.screenshots/
