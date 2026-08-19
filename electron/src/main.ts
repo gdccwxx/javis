@@ -102,6 +102,14 @@ function saveModel(input: { id: string; baseUrl: string; model: string; apiKey?:
   writeFileSync(path, `id: ${id}\nprovider: openai-compatible\nbase_url: ${baseUrl}\nmodel: ${input.model.trim()}\ncredential_ref: ${credentialRef}\n`, "utf8");
   return modelDefinitions().find((item) => item.id === id);
 }
+function resolveDecision(id: string, choice: string) {
+  const safeId = id.replace(/[^a-zA-Z0-9_-]/g, "-");
+  if (!safeId || !choice.trim()) throw new Error("决策信息不完整");
+  const relativePath = `knowledge/decisions/${safeId}.md`;
+  writeControlled(relativePath, `# ${safeId}\n\n- 时间：${now()}\n- 状态：已路由\n- 选择：${choice.trim()}\n- 影响：解除依赖此决策的任务后才可继续执行。\n`);
+  appendTrace(`decision-${safeId}`, "DECISION", "user", `${safeId}: ${choice.trim()}`);
+  return { relativePath };
+}
 function createConversation(message: string) {
   ensureWorkspace();
   const id = taskId();
@@ -170,6 +178,7 @@ ipcMain.handle("definitions:list", () => {
   const files = workspaceSnapshot().files.filter((item) => item.kind === "file").map((item) => item.path);
   return { agents: files.filter((path) => /^agents\/[^/]+\/agent\.md$/.test(path)), skills: files.filter((path) => /^agents\/[^/]+\/skills\/[^/]+\.md$/.test(path)) };
 });
+ipcMain.handle("decisions:resolve", (_event, id: string, choice: string) => resolveDecision(id, choice));
 ipcMain.handle("conversation:create", (_event, message: string) => createConversation(message));
 ipcMain.handle("runtime:runTask", (_event, task: string, modelId: string) => runTask(task, modelId));
 app.whenReady().then(async () => { ensureWorkspace(); registerRendererProtocol(); await createWindow(); app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) void createWindow(); }); });

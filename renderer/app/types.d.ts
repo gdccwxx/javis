@@ -13,6 +13,7 @@ declare global {
       traces: { list(): Promise<string[]> };
       models: { list(): Promise<ModelDefinition[]>; save(input: { id: string; baseUrl: string; model: string; apiKey?: string }): Promise<ModelDefinition> };
       definitions: { list(): Promise<{ agents: string[]; skills: string[] }> };
+      decisions: { resolve(id: string, choice: string): Promise<{ relativePath: string }> };
       conversation: { create(message: string): Promise<{ id: string; sessionPath: string; taskPath: string; tracePath: string; status: string }> };
       runtime: { runTask(task: string, modelId: string): Promise<{ status: string; outputPath?: string; output?: string }> };
     };

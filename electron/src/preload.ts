@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld("firstmate", {
   traces: { list: () => ipcRenderer.invoke("traces:list") },
   models: { list: () => ipcRenderer.invoke("models:list"), save: (input: { id: string; baseUrl: string; model: string; apiKey?: string }) => ipcRenderer.invoke("models:save", input) },
   definitions: { list: () => ipcRenderer.invoke("definitions:list") },
+  decisions: { resolve: (id: string, choice: string) => ipcRenderer.invoke("decisions:resolve", id, choice) },
   conversation: { create: (message: string) => ipcRenderer.invoke("conversation:create", message) },
   runtime: { runTask: (task: string, modelId: string) => ipcRenderer.invoke("runtime:runTask", task, modelId) },
 });
