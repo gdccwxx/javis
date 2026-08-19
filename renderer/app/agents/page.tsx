@@ -1,11 +1,13 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import { Header } from "@/app/components/shared";
-import { CardGrid } from "@/app/components/data";
 
 export default function AgentsPage() {
-  return <>
-    <Header title="Agents" subtitle="agents/ · 角色、模型、权限、Skill 与运行状态均由文件定义">
-      <button className="btn">校验所有定义</button><button className="btn primary">新建 Agent</button>
-    </Header>
-    <div className="list"><div className="filter"><input placeholder="搜索名称、模型、权限或文件路径" /><button className="btn">仅启用</button><button className="btn">按状态</button></div><CardGrid type="agents" /></div>
-  </>;
+  const [agents, setAgents] = useState<string[]>([]);
+  const [selected, setSelected] = useState("");
+  const [content, setContent] = useState("暂无 Agent 定义。请在 javis-wiki/agents/<agent-id>/agent.md 创建定义文件。");
+  async function load(path: string) { if (!window.firstmate) return; setSelected(path); setContent(await window.firstmate.workspace.read(path)); }
+  useEffect(() => { void window.firstmate?.definitions.list().then((value) => { setAgents(value.agents); if (value.agents[0]) void load(value.agents[0]); }); }, []);
+  return <><Header title="Agents" subtitle="agents/ · 角色、权限与运行定义由工作区文件提供"><button className="btn">校验定义</button><button className="btn primary">新建 Agent</button></Header><div className="archive-layout"><aside>{agents.length === 0 ? <p>暂无 Agent 定义</p> : agents.map((agent) => <button key={agent} className={agent === selected ? "selected" : ""} onClick={() => void load(agent)}>{agent.replace("agents/", "")}</button>)}</aside><article><div className="path">{selected || "agents/"}</div><pre className="document-content">{content}</pre></article></div></>;
 }

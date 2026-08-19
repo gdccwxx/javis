@@ -1,11 +1,13 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import { Header } from "@/app/components/shared";
-import { CardGrid } from "@/app/components/data";
 
 export default function ArchivePage() {
-  return <>
-    <Header title="会话归档" subtitle="sessions/ · 原始会话、AI 摘要、决策与恢复指针按文件保存">
-      <button className="btn">筛选日期</button><button className="btn primary">新建会话</button>
-    </Header>
-    <div className="list"><div className="filter"><input placeholder="搜索会话、结论、文件或 Agent" /><button className="btn">仅有决策</button><button className="btn">未提交</button></div><CardGrid type="archive" /></div>
-  </>;
+  const [sessions, setSessions] = useState<string[]>([]);
+  const [selected, setSelected] = useState("");
+  const [content, setContent] = useState("暂无会话。大副对话发送任务后会创建可恢复会话。");
+  async function load(path: string) { if (!window.firstmate) return; setSelected(path); setContent(await window.firstmate.workspace.read(path)); }
+  useEffect(() => { void window.firstmate?.sessions.list().then((items) => { setSessions(items); if (items[0]) void load(items[0]); }); }, []);
+  return <><Header title="会话归档" subtitle="sessions/ · 原始会话、摘要与恢复指针按文件保存"><button className="btn primary">新建会话</button></Header><div className="archive-layout"><aside>{sessions.length === 0 ? <p>暂无会话</p> : sessions.map((session) => <button key={session} className={session === selected ? "selected" : ""} onClick={() => void load(session)}>{session.replace("sessions/", "")}</button>)}</aside><article><div className="path">{selected || "sessions/"}</div><pre className="document-content">{content}</pre></article></div></>;
 }

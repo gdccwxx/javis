@@ -1,10 +1,35 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
 import { Header } from "@/app/components/shared";
 
+type Entry = { path: string; kind: "file" | "directory" };
+
 export default function KnowledgePage() {
+  const [entries, setEntries] = useState<Entry[]>([]);
+  const [selected, setSelected] = useState("knowledge/decisions/design-system-v1.md");
+  const [content, setContent] = useState("正在连接 javis-wiki 工作区…");
+  const [filter, setFilter] = useState("");
+  const files = useMemo(() => entries.filter((entry) => entry.kind === "file" && entry.path.startsWith("knowledge/") && entry.path.toLowerCase().includes(filter.toLowerCase())), [entries, filter]);
+
+  async function load(path: string) {
+    setSelected(path);
+    if (!window.firstmate) return;
+    try { setContent(await window.firstmate.workspace.read(path)); } catch { setContent("文件尚不存在。发送一条大副任务后，系统会生成 sessions、tasks 与 knowledge/traces 文件。"); }
+  }
+  useEffect(() => {
+    void window.firstmate?.workspace.initialize().then((snapshot) => {
+      setEntries(snapshot.files);
+      const firstKnowledgeFile = snapshot.files.find((entry) => entry.kind === "file" && entry.path.startsWith("knowledge/"));
+      if (firstKnowledgeFile) void load(firstKnowledgeFile.path);
+      else setContent("知识目录已初始化。发送一条大副任务后，系统会生成可追溯的 knowledge/traces 文件。");
+    });
+  }, []);
+
   return <>
-    <Header title="知识工作区" subtitle="knowledge/ · 文件是唯一真实来源，版本由后台维护">
+    <Header title="知识工作区" subtitle="javis-wiki / knowledge · 文件是唯一真实来源">
       <button className="btn">查看来源</button><button className="btn primary">编辑文件</button>
     </Header>
-    <div className="knowledge"><aside className="tree"><input className="tree-search" placeholder="筛选文件" /><div className="tree-row folder">⌄ knowledge</div><div className="tree-row indent folder">⌄ decisions</div><button className="tree-row indent selected">◇ design-system-v1.md</button><div className="tree-row indent">◇ file-first-architecture.md</div><div className="tree-row indent folder">⌄ traces</div><div className="tree-row indent">◇ task-20260817-003.json</div><div className="tree-row indent folder">⌄ summaries</div><div className="tree-row indent">◇ desktop-redesign.md</div></aside><article className="document"><div className="path">knowledge / decisions / design-system-v1.md</div><h2>统一设计系统决策</h2><div className="docmeta">来源：session 2026-08-17 · 未提交变更 · 关联 trace 5 个</div><div className="callout">结论：FirstMate v1 默认采用深色工程化工作台。电绿色只用于主动作、连接和当前活动状态；所有运行过程通过 trace 文件可追溯。</div><h3>决策依据</h3><ul><li>文件、Git、模型、Skill 与 Agent 调用需要长期高密度审阅，营销化大留白会浪费工作面积。</li><li>细边框和表面阶梯能清晰区分文件树、编辑区、调用过程和检查器，避免厚重阴影。</li><li>调用轨迹必须显示 Agent、Skill、模型、时间、输入和输出，而不是只给“正在思考”。</li></ul><h3>关联资产</h3><span className="file">DESIGN.md</span> <span className="file">outputs/FirstMate_Desktop_Prototype.html</span></article></div>
+    <div className="knowledge"><aside className="tree"><input className="tree-search" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="筛选文件" /><div className="tree-row folder">⌄ knowledge</div>{files.length === 0 && <div className="tree-row indent">暂无可读取文件</div>}{files.map((entry) => <button key={entry.path} className={`tree-row indent ${entry.path === selected ? "selected" : ""}`} onClick={() => void load(entry.path)}>◇ {entry.path.replace("knowledge/", "")}</button>)}</aside><article className="document"><div className="path">{selected}</div><h2>{selected.split("/").at(-1) ?? "知识文件"}</h2><div className="docmeta">来源：javis-wiki · 工作区文件直接读取 · 变更经受控 IPC 写入</div><div className="callout">知识、会话、任务和调用记录都以工作区文件为真实来源。页面只呈现状态，不持有独立业务真相。</div><pre className="document-content">{content}</pre></article></div>
   </>;
 }
