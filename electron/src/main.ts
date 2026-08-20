@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol, safeStorage } from "electron";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, dirname, normalize, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -13,7 +13,7 @@ const CONTROLLED_ROOTS = ["tasks", "outputs", "knowledge", "sessions"];
 type Entry = { path: string; kind: "file" | "directory" };
 type Provider = "openai-compatible" | "anthropic-compatible";
 type ModelDefinition = { id: string; provider: Provider; baseUrl: string; model: string; credentialRef: string; configured: boolean };
-type AgentDefinition = { id: string; title: string; modelId: string; skills: string[]; writeScope: string[]; enabled: boolean; prompt: string; path: string };
+type AgentDefinition = { id: string; title: string; modelId: string; skills: string[]; capabilities: string[]; writeScope: string[]; enabled: boolean; prompt: string; path: string };
 type TaskStatus = "queued" | "running" | "waiting_credentials" | "waiting_input" | "completed" | "failed" | "cancelled";
 type TracePhase = "PLAN" | "QUEUED" | "READ" | "MODEL" | "WRITE" | "DONE" | "FAILED" | "BLOCKED" | "DECISION";
 type TraceEvent = {
@@ -42,6 +42,7 @@ type SupervisionSnapshot = {
   recentEvents: TraceEvent[];
   contextFiles: string[];
 };
+type SessionRecord = { id: string; path: string; title: string; createdAt: string; status: string; agentId: string; summary: string; hasOutput: boolean };
 let mainWindow: BrowserWindow | null = null;
 let workspaceRoot = DEFAULT_WORKSPACE;
 
@@ -52,14 +53,89 @@ function knowledgeTime(date = new Date()) {
 }
 function knowledgeTitle(value: string) {
   const summary = value.match(/^(?:摘要|总结|summary)\s*[:：]\s*(.+)$/im)?.[1] ?? value.split(/\r?\n/).find((line) => line.trim() && !line.trim().startsWith("#")) ?? value;
-  return summary.replace(/\s+/g, " ").trim().slice(0, 80) || "未命名知识";
+  return summary.replace(/[*_`#]/g, "").replace(/\s+/g, " ").trim().slice(0, 80) || "未命名知识";
 }
-function writeKnowledge(task: string, prompt: string, summary?: string) {
-  const title = knowledgeTitle(summary ?? prompt).replace(/^\d{4}[/-]\d{1,2}[/-]\d{1,2}\s+\d{1,2}:\d{2}(?::\d{2})?\s*[-—:：]?\s*/, "");
+function markdownQuote(value: string) {
+  return value.trim().split(/\r?\n/).map((line) => `> ${line || " "}`).join("\n");
+}
+function outputSummary(value: string) {
+  const clean = value.replace(/^---[\s\S]*?---\s*/m, "").replace(/^#{1,6}\s+.+$/gm, "").replace(/[*_`>#|]/g, " ").replace(/\s+/g, " ").trim();
+  return clean.slice(0, 180) || "任务已完成，详见处理结果。";
+}
+function writeKnowledge(task: string, prompt: string, output?: string) {
+  const taskPath = `tasks/${task}.yaml`;
+  const taskSource = existsSync(assertWorkspacePath(taskPath)) ? readFileSync(assertWorkspacePath(taskPath), "utf8") : "";
+  const agentId = yamlField(taskSource, "agent") || "first-mate";
+  const status = output ? "已完成" : "待处理";
+  const title = agentId === "journal"
+    ? `日记 · ${knowledgeTime().slice(0, 10).replace(/\//g, "-")}`
+    : knowledgeTitle(prompt).replace(/^\d{4}[/-]\d{1,2}[/-]\d{1,2}\s+\d{1,2}:\d{2}(?::\d{2})?\s*[-—:：]?\s*/, "");
   const relativePath = `knowledge/entries/${task}.md`;
-  const body = summary ? `## 总结\n\n${summary.trim()}\n` : "## 总结\n\n等待模型返回。\n";
-  writeControlled(relativePath, `# ${title}\n\n- 时间：${knowledgeTime()}\n- 用户 Prompt：${prompt}\n\n${body}`);
+  const resultSection = output
+    ? `## 处理结果\n\n${output.trim()}\n`
+    : "## 处理结果\n\n> 任务已创建，等待智能体执行。\n";
+  writeControlled(relativePath, `---
+type: knowledge-entry
+id: ${task}
+created_at: ${now()}
+status: ${status}
+agent: ${agentId}
+source_session: sessions/${task}.md
+source_task: ${taskPath}
+source_output: ${output ? `outputs/${task}/result.md` : ""}
+---
+
+# ${title}
+
+## 摘要
+
+${output ? outputSummary(output) : "已记录用户输入，等待任务结果补充。"}
+
+## 基本信息
+
+| 字段 | 内容 |
+| --- | --- |
+| 状态 | ${status} |
+| 执行智能体 | ${agentId} |
+| 创建时间 | ${knowledgeTime()} |
+| 来源会话 | \`sessions/${task}.md\` |
+| 来源任务 | \`${taskPath}\` |
+${output ? `| 结果产物 | \`outputs/${task}/result.md\` |
+` : ""}
+
+## 用户输入
+
+${markdownQuote(prompt)}
+
+${resultSection}
+## 关联文件
+
+- \`sessions/${task}.md\`
+- \`${taskPath}\`
+- \`knowledge/traces/${task}.json\`
+${output ? `- \`outputs/${task}/result.md\`
+` : ""}`);
   return relativePath;
+}
+function migrateLegacyKnowledgeEntries() {
+  const directory = resolve(workspaceRoot, "knowledge/entries");
+  if (!existsSync(directory)) return;
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (!entry.isFile() || !/^task-.+\.md$/.test(entry.name)) continue;
+    const task = entry.name.replace(/\.md$/, "");
+    const knowledgePath = `knowledge/entries/${entry.name}`;
+    const source = readFileSync(assertWorkspacePath(knowledgePath), "utf8");
+    if (source.startsWith("---\ntype: knowledge-entry\n")) continue;
+    const taskPath = `tasks/${task}.yaml`;
+    if (!existsSync(assertWorkspacePath(taskPath))) continue;
+    const taskSource = readFileSync(assertWorkspacePath(taskPath), "utf8");
+    const goal = taskGoal(taskSource);
+    const outputPath = `outputs/${task}/result.md`;
+    const output = existsSync(assertWorkspacePath(outputPath))
+      ? readFileSync(assertWorkspacePath(outputPath), "utf8").replace(/^#.*?\n+/s, "").trim()
+      : undefined;
+    writeKnowledge(task, goal || "历史知识记录", output);
+  }
 }
 function taskGoal(source: string) {
   const raw = source.match(/^goal:\s*(.+)$/m)?.[1]?.trim();
@@ -71,17 +147,89 @@ function taskGoal(source: string) {
     return raw.replace(/^["']|["']$/g, "");
   }
 }
+function attachedMaterialPaths(goal: string) {
+  const paths = Array.from(goal.matchAll(/^\s*-\s+(materials\/[^\r\n]+)\s*$/gm), (match) => match[1]?.trim() ?? "");
+  return [...new Set(paths)].filter((path) => /^materials\/[^/]+$/.test(path));
+}
+function materialContext(paths: string[]) {
+  const files: string[] = [];
+  const sections: string[] = [];
+  let remaining = 60000;
+  for (const relativePath of paths) {
+    if (remaining <= 0) break;
+    try {
+      const fullPath = assertWorkspacePath(relativePath);
+      const extension = relativePath.split(".").at(-1)?.toLowerCase();
+      if (extension !== "md" && extension !== "txt") {
+        sections.push(`### ${relativePath}\n\n此素材已导入，但当前本地 Runtime 仅能直接读取 Markdown / TXT；请基于文件名保留引用，不要假设其内容。`);
+        files.push(relativePath);
+        continue;
+      }
+      const source = readFileSync(fullPath, "utf8");
+      const excerpt = source.slice(0, remaining);
+      sections.push(`### ${relativePath}\n\n${excerpt}${source.length > excerpt.length ? "\n\n[内容已截断]" : ""}`);
+      files.push(relativePath);
+      remaining -= excerpt.length;
+    } catch {
+      sections.push(`### ${relativePath}\n\n素材无法读取。不要编造其内容。`);
+      files.push(relativePath);
+    }
+  }
+  return { files, content: sections.join("\n\n---\n\n") };
+}
+function sessionConversation(task: string) {
+  const source = readFileSync(assertWorkspacePath(`sessions/${task}.md`), "utf8");
+  const lines = source.split(/\r?\n/);
+  const turns: string[] = [];
+  let section = "";
+  const buffer: string[] = [];
+  const flush = () => {
+    const value = buffer.join("\n").trim();
+    if (!value || !section) return;
+    if (section.startsWith("用户消息")) turns.push(`用户：${value}`);
+    if (section.startsWith("First Mate 输出")) turns.push(`助手：${value}`);
+  };
+  for (const line of lines) {
+    const heading = line.match(/^##\s+(.+)$/)?.[1];
+    if (heading) {
+      flush();
+      section = heading;
+      buffer.length = 0;
+      continue;
+    }
+    if (section && section !== "当前摘要" && section !== "摘要") buffer.push(line);
+  }
+  flush();
+  return turns.join("\n\n");
+}
 function updateSessionResult(task: string, status: "已完成" | "失败", output: string) {
   const relativePath = `sessions/${task}.md`;
   const source = readFileSync(assertWorkspacePath(relativePath), "utf8");
   const summary = status === "已完成"
     ? `已完成。核心结果：${knowledgeTitle(output)}`
     : `任务失败：${output}`;
-  const next = source
+  const turn = (source.match(/^## 用户消息/gm) ?? []).length;
+  const withoutSummary = source
+    .replace(/\n## 摘要[\s\S]*?(?=\n## 用户消息 · 第|\n## First Mate 输出 · 第|$)/g, "")
+    .replace(/\n## 当前摘要[\s\S]*$/g, "")
+    .trimEnd();
+  const next = withoutSummary
     .replace(/^- 状态：.*$/m, `- 状态：${status}`)
-    .replace(/^## 摘要[\s\S]*$/m, `## First Mate 输出\n\n${output.trim()}\n\n## 摘要\n\n${summary}\n`);
+    + `\n\n## First Mate 输出 · 第 ${turn} 轮\n\n${output.trim()}\n\n## 当前摘要\n\n${summary}\n`;
   writeControlled(relativePath, next);
   return relativePath;
+}
+function sessionRecord(path: string): SessionRecord | null {
+  try {
+    const source = readFileSync(assertWorkspacePath(path), "utf8");
+    const id = basename(path, ".md");
+    const createdAt = source.match(/^- 时间：(.+)$/m)?.[1]?.trim() ?? "";
+    const status = source.match(/^- 状态：(.+)$/m)?.[1]?.trim() ?? "未知";
+    const summary = source.match(/^## 摘要\s*\n+([\s\S]*?)(?:\n## |$)/m)?.[1]?.replace(/\s+/g, " ").trim() ?? "";
+    const firstMessage = source.match(/^## 用户消息(?: · 第 \d+ 轮)?\s*\n+([\s\S]*?)(?:\n## |$)/m)?.[1]?.replace(/\s+/g, " ").trim() ?? "";
+    const taskSource = existsSync(assertWorkspacePath(`tasks/${id}.yaml`)) ? readFileSync(assertWorkspacePath(`tasks/${id}.yaml`), "utf8") : "";
+    return { id, path, title: knowledgeTitle(firstMessage || summary || id), createdAt, status, agentId: yamlField(taskSource, "agent") || "first-mate", summary, hasOutput: existsSync(assertWorkspacePath(`outputs/${id}/result.md`)) };
+  } catch { return null; }
 }
 function taskId() { return `task-${Date.now()}`; }
 function ensureWorkspace(root = workspaceRoot) {
@@ -118,6 +266,28 @@ function writeControlled(relativePath: string, content: string) {
   writeFileSync(path, content, "utf8");
   return { relativePath };
 }
+function importMaterials() {
+  const result = dialog.showOpenDialogSync(mainWindow!, {
+    title: "导入素材",
+    properties: ["openFile", "multiSelections"],
+    filters: [{ name: "支持的素材", extensions: ["md", "txt", "pdf", "docx", "pptx", "xlsx", "png", "jpg", "jpeg", "webp"] }, { name: "所有文件", extensions: ["*"] }],
+  });
+  if (!result?.length) return [];
+  const materialRoot = resolve(workspaceRoot, "materials");
+  mkdirSync(materialRoot, { recursive: true });
+  const imported = result.map((sourcePath) => {
+    const originalName = basename(sourcePath).replace(/[^\p{L}\p{N}._ -]/gu, "-");
+    const extensionIndex = originalName.lastIndexOf(".");
+    const base = extensionIndex > 0 ? originalName.slice(0, extensionIndex) : originalName;
+    const extension = extensionIndex > 0 ? originalName.slice(extensionIndex) : "";
+    let targetName = originalName;
+    let counter = 2;
+    while (existsSync(resolve(materialRoot, targetName))) targetName = `${base}-${counter++}${extension}`;
+    copyFileSync(sourcePath, resolve(materialRoot, targetName));
+    return `materials/${targetName}`;
+  });
+  return imported;
+}
 function readTaskStatus(task: string) {
   const file = assertWorkspacePath(`tasks/${task}.yaml`);
   return readFileSync(file, "utf8").match(/^status:\s*(.+)$/m)?.[1]?.trim() ?? "unknown";
@@ -126,6 +296,19 @@ function updateTaskStatus(task: string, status: TaskStatus) {
   const relativePath = `tasks/${task}.yaml`;
   const source = readFileSync(assertWorkspacePath(relativePath), "utf8");
   writeControlled(relativePath, source.replace(/^status:\s*.*$/m, `status: ${status}`).replace(/^updated_at:.*$/m, "").trimEnd() + `\nupdated_at: ${now()}\n`);
+}
+function updateTaskGoal(task: string, goal: string) {
+  const relativePath = `tasks/${task}.yaml`;
+  const source = readFileSync(assertWorkspacePath(relativePath), "utf8");
+  const materialFiles = attachedMaterialPaths(goal);
+  const inputFiles = [`sessions/${task}.md`, `knowledge/entries/${task}.md`, ...materialFiles];
+  const next = source
+    .replace(/^status:\s*.*$/m, "status: queued")
+    .replace(/^goal:\s*.*$/m, `goal: ${JSON.stringify(goal)}`)
+    .replace(/^input_files:\s*.*$/m, `input_files: [${inputFiles.join(", ")}]`)
+    .replace(/^updated_at:.*$/m, "")
+    .trimEnd() + `\nupdated_at: ${now()}\n`;
+  writeControlled(relativePath, next);
 }
 function appendTrace(task: string, phase: TracePhase, input: {
   status?: TaskStatus | "recorded";
@@ -205,6 +388,7 @@ function agentDefinition(agentId: string): AgentDefinition {
     title: prompt.match(/^#\s+(.+)$/m)?.[1]?.trim() || id,
     modelId: yamlField(metadata, "model") || "default-api",
     skills: yamlList(metadata, "skills"),
+    capabilities: yamlList(metadata, "capabilities"),
     writeScope: yamlList(metadata, "write_scope"),
     enabled: yamlField(metadata, "enabled") !== "false",
     prompt,
@@ -249,8 +433,12 @@ function taskBrief(path: string): BriefItem | null {
     const status = yamlField(source, "status") || "queued";
     const goal = briefTitle(yamlField(source, "goal"));
     const trace = traceSummary(id);
-    return { id, title: goal, detail: trace ? `任务状态：${status} · ${trace}` : `任务状态：${status}`, status, path };
+    return { id, title: goal, detail: trace ? `任务状态：${taskStatusLabel(status)} · ${trace}` : `任务状态：${taskStatusLabel(status)}`, status, path };
   } catch { return null; }
+}
+function taskStatusLabel(status: string) {
+  const labels: Record<string, string> = { queued: "待运行", running: "运行中", waiting_credentials: "缺少凭证", waiting_input: "等待补充", completed: "已完成", failed: "失败", cancelled: "已取消", unknown: "未知" };
+  return labels[status] ?? status;
 }
 function decisionBrief(path: string): BriefItem | null {
   try {
@@ -328,7 +516,7 @@ function createDefinition(kind: "agent" | "skill", input: { agentId: string; nam
   const relativePath = kind === "agent" ? `agents/${agentId}/agent.md` : `skills/${name}.md`;
   if (existsSync(assertWorkspacePath(relativePath))) throw new Error("同名定义已存在");
   if (kind === "agent") {
-    return saveDefinition(relativePath, `---\nid: ${agentId}\nmodel: default-api\nwrite_scope: [tasks, outputs, knowledge, sessions]\nenabled: true\n---\n\n# ${name}\n\n请描述该 Agent 的职责、输入输出约定与权限边界。\n`);
+    return saveDefinition(relativePath, `---\nid: ${agentId}\nmodel: default-api\nskills: []\ncapabilities: [file_read, file_write]\nwrite_scope: [tasks, outputs, knowledge, sessions]\nenabled: true\n---\n\n# ${name}\n\n请描述该 Agent 的职责、输入输出约定、可用能力与权限边界。\n`);
   }
   return saveDefinition(relativePath, `# ${name}\n\n## 用途\n\n请描述该共享 Skill 的工作流程、输入、输出与限制。任何 Agent 可在自身定义的 \`skills\` 字段中引用它。\n`);
 }
@@ -356,14 +544,32 @@ function resolveDecision(id: string, choice: string) {
   appendTrace(`decision-${safeId}`, "DECISION", { status: "recorded", agentId: "user", skillIds: [], outputFiles: [relativePath], detail: `${safeId}: ${choice.trim()}` });
   return { relativePath };
 }
-function createConversation(message: string) {
+function appendSessionTurn(sessionPath: string, message: string) {
+  const source = readFileSync(assertWorkspacePath(sessionPath), "utf8");
+  const turn = (source.match(/^## 用户消息/gm) ?? []).length + 1;
+  const next = source
+    .replace(/\n## 当前摘要[\s\S]*$/g, "")
+    .replace(/^- 状态：.*$/m, "- 状态：进行中")
+    .trimEnd() + `\n\n## 用户消息 · 第 ${turn} 轮\n\n${message}\n`;
+  writeControlled(sessionPath, next);
+}
+function createConversation(message: string, existingTask?: string) {
   ensureWorkspace();
-  const id = taskId();
+  const id = existingTask?.replace(/[^a-zA-Z0-9_-]/g, "-") || taskId();
   const assignedAgent = routeAgent(message);
   const sessionPath = `sessions/${id}.md`;
   const taskPath = `tasks/${id}.yaml`;
+  if (existingTask && existsSync(assertWorkspacePath(sessionPath)) && existsSync(assertWorkspacePath(taskPath))) {
+    appendSessionTurn(sessionPath, message);
+    updateTaskGoal(id, message);
+    writeKnowledge(id, message);
+    appendTrace(id, "PLAN", { status: "queued", agentId: "first-mate", skillIds: ["stow-context"], inputFiles: [sessionPath, assignedAgent.path], outputFiles: [taskPath, `knowledge/entries/${id}.md`], detail: `大副将第 ${((readFileSync(assertWorkspacePath(sessionPath), "utf8").match(/^## 用户消息/gm) ?? []).length)} 轮消息交接给 ${assignedAgent.id}` });
+    appendTrace(id, "QUEUED", { status: "queued", agentId: assignedAgent.id, skillIds: assignedAgent.skills, inputFiles: [taskPath, assignedAgent.path], detail: `等待 ${assignedAgent.id} 继续执行当前会话` });
+    return { id, sessionPath, taskPath, tracePath: `knowledge/traces/${id}.json`, status: "queued", agentId: assignedAgent.id };
+  }
   writeControlled(sessionPath, `# ${id}\n\n- 时间：${now()}\n- 状态：进行中\n\n## 用户消息\n\n${message}\n\n## 摘要\n\n等待任务结果；关闭或完成后可继续沉淀为恢复上下文。\n`);
-  writeControlled(taskPath, `id: ${id}\nstatus: queued\ncreated_at: ${now()}\nupdated_at: ${now()}\nagent: ${assignedAgent.id}\nskills: [${assignedAgent.skills.join(", ")}]\ngoal: ${JSON.stringify(message)}\ninput_files: [${sessionPath}, knowledge/entries/${id}.md]\noutput_dir: outputs/${id}\n`);
+  const materialFiles = attachedMaterialPaths(message);
+  writeControlled(taskPath, `id: ${id}\nstatus: queued\ncreated_at: ${now()}\nupdated_at: ${now()}\nagent: ${assignedAgent.id}\nskills: [${assignedAgent.skills.join(", ")}]\ngoal: ${JSON.stringify(message)}\ninput_files: [${sessionPath}, knowledge/entries/${id}.md${materialFiles.length ? `, ${materialFiles.join(", ")}` : ""}]\noutput_dir: outputs/${id}\n`);
   writeKnowledge(id, message);
   appendTrace(id, "PLAN", { status: "queued", agentId: "first-mate", skillIds: ["stow-context"], inputFiles: [sessionPath, assignedAgent.path], outputFiles: [taskPath, `knowledge/entries/${id}.md`], detail: `大副创建任务并分派给 ${assignedAgent.id}` });
   if (assignedAgent.id !== "first-mate") appendTrace(id, "READ", { status: "queued", agentId: "first-mate", skillIds: ["stow-context"], inputFiles: [assignedAgent.path], detail: `加载 ${assignedAgent.id} Agent 定义并完成任务交接` });
@@ -385,15 +591,19 @@ async function runTask(task: string, modelId: string) {
   try {
     const goal = taskGoal(taskSource);
     if (!goal) throw new Error("任务目标为空，无法调用模型");
-    appendTrace(task, "READ", { status: "running", agentId: assignedAgent.id, skillIds: assignedAgent.skills, modelId: selectedModelId, inputFiles: [`tasks/${task}.yaml`, `sessions/${task}.md`, `knowledge/entries/${task}.md`, assignedAgent.path], detail: `已解析用户目标（${Array.from(goal).length} 字符），由 ${assignedAgent.id} 读取上下文与 Agent 定义` });
-    appendTrace(task, "MODEL", { status: "running", agentId: assignedAgent.id, skillIds: assignedAgent.skills, modelId: selectedModelId, inputFiles: [`tasks/${task}.yaml`, assignedAgent.path], detail: `${assignedAgent.id} 调用 ${definition.provider} API（用户目标 ${Array.from(goal).length} 字符）` });
-    const system = `${assignedAgent.prompt}\n\n你是 FirstMate 工作区中的 ${assignedAgent.id}。仅输出可审阅的任务结果，不包含密钥。`;
+    const conversation = sessionConversation(task);
+    const materials = materialContext(attachedMaterialPaths(goal));
+    const modelInput = [conversation || goal, materials.content ? `## 已授权读取的本地素材\n\n${materials.content}` : ""].filter(Boolean).join("\n\n---\n\n");
+    const turnCount = (conversation.match(/^用户：/gm) ?? []).length;
+    appendTrace(task, "READ", { status: "running", agentId: assignedAgent.id, skillIds: assignedAgent.skills, modelId: selectedModelId, inputFiles: [`tasks/${task}.yaml`, `sessions/${task}.md`, `knowledge/entries/${task}.md`, assignedAgent.path, ...materials.files], detail: `已解析用户目标（${Array.from(goal).length} 字符）、${turnCount} 轮会话上下文，并读取 ${materials.files.length} 个已授权素材` });
+    appendTrace(task, "MODEL", { status: "running", agentId: assignedAgent.id, skillIds: assignedAgent.skills, modelId: selectedModelId, inputFiles: [`tasks/${task}.yaml`, `sessions/${task}.md`, assignedAgent.path, ...materials.files], detail: `${assignedAgent.id} 调用 ${definition.provider} API（当前第 ${turnCount} 轮）` });
+    const system = `${assignedAgent.prompt}\n\n你是 FirstMate 工作区中的 ${assignedAgent.id}。用户已显式附加的本地素材内容会在消息中提供，请直接基于这些内容工作；不得声称无法访问已提供的 Markdown / TXT 素材，也不得编造未读取的素材内容。仅输出可审阅的任务结果，不包含密钥。`;
     const endpoint = definition.provider === "anthropic-compatible"
       ? (definition.baseUrl.endsWith("/v1/messages") ? definition.baseUrl : `${definition.baseUrl}/v1/messages`)
       : (definition.baseUrl.endsWith("/chat/completions") ? definition.baseUrl : `${definition.baseUrl}/chat/completions`);
     const body = definition.provider === "anthropic-compatible"
-      ? { model: definition.model, max_tokens: 4096, system, messages: [{ role: "user", content: goal }] }
-      : { model: definition.model, messages: [{ role: "system", content: system }, { role: "user", content: goal }], temperature: 0.2, max_completion_tokens: 4096 };
+      ? { model: definition.model, max_tokens: 4096, system, messages: [{ role: "user", content: modelInput }] }
+      : { model: definition.model, messages: [{ role: "system", content: system }, { role: "user", content: modelInput }], temperature: 0.2, max_completion_tokens: 4096 };
     const headers: Record<string, string> = { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` };
     const response = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(body) });
     if (!response.ok) throw new Error(`模型调用失败：${response.status} ${await response.text()}`);
@@ -444,9 +654,10 @@ ipcMain.handle("workspace:initialize", () => { ensureWorkspace(); return workspa
 ipcMain.handle("workspace:snapshot", () => workspaceSnapshot());
 ipcMain.handle("workspace:read", (_event, relativePath: string) => readFileSync(assertWorkspacePath(relativePath), "utf8"));
 ipcMain.handle("workspace:writeControlled", (_event, relativePath: string, content: string) => writeControlled(relativePath, content));
+ipcMain.handle("workspace:importMaterials", () => importMaterials());
 ipcMain.handle("workspace:brief", () => workspaceBrief());
 ipcMain.handle("workspace:supervision", () => supervisionSnapshot());
-ipcMain.handle("sessions:list",  () => workspaceSnapshot().files.filter((item) => item.kind === "file" && item.path.startsWith("sessions/")).map((item) => item.path));
+ipcMain.handle("sessions:list",  () => workspaceSnapshot().files.filter((item) => item.kind === "file" && /^sessions\/task-[^/]+\.md$/.test(item.path)).map((item) => sessionRecord(item.path)).filter((item): item is SessionRecord => item !== null).sort((left, right) => right.createdAt.localeCompare(left.createdAt)));
 ipcMain.handle("tasks:list", () => workspaceSnapshot().files.filter((item) => item.kind === "file" && item.path.startsWith("tasks/")).map((item) => ({ path: item.path, status: readTaskStatus(basename(item.path, ".yaml")) })));
 ipcMain.handle("traces:list", () => workspaceSnapshot().files.filter((item) => item.kind === "file" && item.path.startsWith("knowledge/traces/")).map((item) => item.path));
 ipcMain.handle("models:list", () => modelDefinitions());
@@ -458,7 +669,7 @@ ipcMain.handle("definitions:list", () => {
 ipcMain.handle("definitions:save", (_event, relativePath: string, content: string) => saveDefinition(relativePath, content));
 ipcMain.handle("definitions:create", (_event, kind: "agent" | "skill", input: { agentId: string; name: string }) => createDefinition(kind, input));
 ipcMain.handle("decisions:resolve", (_event, id: string, choice: string) => resolveDecision(id, choice));
-ipcMain.handle("conversation:create", (_event, message: string) => createConversation(message));
+ipcMain.handle("conversation:create", (_event, message: string, existingTask?: string) => createConversation(message, existingTask));
 ipcMain.handle("runtime:runTask", (_event, task: string, modelId: string) => runTask(task, modelId));
-app.whenReady().then(async () => { if (process.platform === "darwin") app.dock.setIcon(APP_ICON); ensureWorkspace(); registerRendererProtocol(); await createWindow(); app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) void createWindow(); }); });
+app.whenReady().then(async () => { if (process.platform === "darwin") app.dock.setIcon(APP_ICON); ensureWorkspace(); migrateLegacyKnowledgeEntries(); registerRendererProtocol(); await createWindow(); app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) void createWindow(); }); });
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });

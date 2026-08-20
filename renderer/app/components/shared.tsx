@@ -5,7 +5,7 @@ export function Header({ title, subtitle, children }: { title: string; subtitle:
 }
 
 export function Status({ value }: { value: string }) {
-  return <span className={`status ${value === "RUNNING" ? "running" : value === "ENABLED" || value === "READY" || value === "COMMITTED" || value === "健康" ? "ready" : "off"}`}>{value}</span>;
+  return <span className={`status ${value === "RUNNING" || value === "运行中" ? "running" : value === "ENABLED" || value === "READY" || value === "COMMITTED" || value === "健康" || value === "已完成" ? "ready" : "off"}`}>{value}</span>;
 }
 
 export { nav };
