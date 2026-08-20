@@ -3,6 +3,8 @@ node_modules/
 dist/
 out/
 .next/
+.next-*/
+.next.*/
 tsconfig.tsbuildinfo
 
 # 日志与系统文件

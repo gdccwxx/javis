@@ -5,7 +5,7 @@
   "description": "FirstMate — 文件优先、模型可插拔、知识可版本化的本地 Agent 工作台。",
   "main": "electron/dist/main.cjs",
   "scripts": {
-    "dev": "pnpm --filter electron build && electron electron/",
+    "dev": "pnpm --filter renderer build && pnpm --filter electron dev",
     "start": "pnpm --filter electron start",
     "build": "pnpm --filter renderer build && pnpm --filter electron build",
     "typecheck": "pnpm -r typecheck"
@@ -14,5 +14,5 @@
     "electron",
     "renderer"
   ],
-  "packageManager": "pnpm@10.9.7"
+  "packageManager": "pnpm@10.14.0"
 }
