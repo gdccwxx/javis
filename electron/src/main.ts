@@ -15,7 +15,7 @@ type Provider = "openai-compatible" | "anthropic-compatible";
 type ModelDefinition = { id: string; provider: Provider; baseUrl: string; model: string; credentialRef: string; configured: boolean };
 type AgentDefinition = { id: string; title: string; modelId: string; skills: string[]; capabilities: string[]; writeScope: string[]; enabled: boolean; prompt: string; path: string };
 type TaskStatus = "queued" | "running" | "waiting_credentials" | "waiting_input" | "completed" | "failed" | "cancelled";
-type TracePhase = "PLAN" | "QUEUED" | "READ" | "MODEL" | "WRITE" | "DONE" | "FAILED" | "BLOCKED" | "DECISION";
+type TracePhase = "PLAN" | "QUEUED" | "READ" | "MODEL" | "TOOL" | "WRITE" | "DONE" | "FAILED" | "BLOCKED" | "DECISION";
 type TraceEvent = {
   id: string;
   taskId: string;
@@ -151,6 +151,10 @@ function attachedMaterialPaths(goal: string) {
   const paths = Array.from(goal.matchAll(/^\s*-\s+(materials\/[^\r\n]+)\s*$/gm), (match) => match[1]?.trim() ?? "");
   return [...new Set(paths)].filter((path) => /^materials\/[^/]+$/.test(path));
 }
+function taskMaterialPaths(source: string) {
+  const input = source.match(/^input_files:\s*\[([^\]]*)\]\s*$/m)?.[1] ?? "";
+  return [...new Set(input.split(",").map((item) => item.trim()).filter((path) => /^materials\/[^/]+$/.test(path)))];
+}
 function materialContext(paths: string[]) {
   const files: string[] = [];
   const sections: string[] = [];
@@ -176,6 +180,29 @@ function materialContext(paths: string[]) {
     }
   }
   return { files, content: sections.join("\n\n---\n\n") };
+}
+type ParsedToolCall = { name: "Read" | "ReadMultipleFiles"; paths: string[] };
+function parseModelToolCall(output: string): ParsedToolCall | null {
+  const name = output.match(/<invoke\s+name="([^"]+)">/i)?.[1];
+  if (name !== "Read" && name !== "ReadMultipleFiles") return null;
+  const singlePath = output.match(/<parameter\s+name="file_path">([\s\S]*?)<\/parameter>/i)?.[1]?.trim();
+  const multiplePaths = output.match(/<parameter\s+name="file_paths">([\s\S]*?)<\/parameter>/i)?.[1]?.trim();
+  if (name === "Read" && singlePath) return { name, paths: [singlePath] };
+  if (name === "ReadMultipleFiles" && multiplePaths) {
+    try {
+      const parsed: unknown = JSON.parse(multiplePaths);
+      if (Array.isArray(parsed) && parsed.every((path) => typeof path === "string")) return { name, paths: parsed };
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+function executeModelToolCall(call: ParsedToolCall) {
+  const safePaths = call.paths.filter((path) => path && !path.includes("\0") && !path.startsWith("/") && !path.includes("..")).slice(0, 12);
+  if (safePaths.length === 0) return { files: [] as string[], content: "工具调用未提供有效的工作区相对路径。" };
+  const result = materialContext(safePaths);
+  return { ...result, content: `工具 ${call.name} 的执行结果：\n\n${result.content || "未读取到可用内容。"}` };
 }
 function sessionConversation(task: string) {
   const source = readFileSync(assertWorkspacePath(`sessions/${task}.md`), "utf8");
@@ -300,7 +327,7 @@ function updateTaskStatus(task: string, status: TaskStatus) {
 function updateTaskGoal(task: string, goal: string) {
   const relativePath = `tasks/${task}.yaml`;
   const source = readFileSync(assertWorkspacePath(relativePath), "utf8");
-  const materialFiles = attachedMaterialPaths(goal);
+  const materialFiles = [...new Set([...taskMaterialPaths(source), ...attachedMaterialPaths(goal)])];
   const inputFiles = [`sessions/${task}.md`, `knowledge/entries/${task}.md`, ...materialFiles];
   const next = source
     .replace(/^status:\s*.*$/m, "status: queued")
@@ -592,24 +619,44 @@ async function runTask(task: string, modelId: string) {
     const goal = taskGoal(taskSource);
     if (!goal) throw new Error("任务目标为空，无法调用模型");
     const conversation = sessionConversation(task);
-    const materials = materialContext(attachedMaterialPaths(goal));
+    const materialFiles = [...new Set([...taskMaterialPaths(taskSource), ...attachedMaterialPaths(conversation), ...attachedMaterialPaths(goal)])];
+    const materials = materialContext(materialFiles);
     const modelInput = [conversation || goal, materials.content ? `## 已授权读取的本地素材\n\n${materials.content}` : ""].filter(Boolean).join("\n\n---\n\n");
     const turnCount = (conversation.match(/^用户：/gm) ?? []).length;
     appendTrace(task, "READ", { status: "running", agentId: assignedAgent.id, skillIds: assignedAgent.skills, modelId: selectedModelId, inputFiles: [`tasks/${task}.yaml`, `sessions/${task}.md`, `knowledge/entries/${task}.md`, assignedAgent.path, ...materials.files], detail: `已解析用户目标（${Array.from(goal).length} 字符）、${turnCount} 轮会话上下文，并读取 ${materials.files.length} 个已授权素材` });
     appendTrace(task, "MODEL", { status: "running", agentId: assignedAgent.id, skillIds: assignedAgent.skills, modelId: selectedModelId, inputFiles: [`tasks/${task}.yaml`, `sessions/${task}.md`, assignedAgent.path, ...materials.files], detail: `${assignedAgent.id} 调用 ${definition.provider} API（当前第 ${turnCount} 轮）` });
-    const system = `${assignedAgent.prompt}\n\n你是 FirstMate 工作区中的 ${assignedAgent.id}。用户已显式附加的本地素材内容会在消息中提供，请直接基于这些内容工作；不得声称无法访问已提供的 Markdown / TXT 素材，也不得编造未读取的素材内容。仅输出可审阅的任务结果，不包含密钥。`;
+    const system = `${assignedAgent.prompt}\n\n你是 FirstMate 工作区中的 ${assignedAgent.id}。用户已显式附加的本地素材内容会在消息中提供，请直接基于这些内容工作；不得声称无法访问已提供的 Markdown / TXT 素材，也不得编造未读取的素材内容。不要输出任何工具调用、XML 工具标签或“请读取文件”的请求；素材已由本地 Runtime 读取并放入上下文。仅输出可审阅的最终结果，不包含密钥。`;
     const endpoint = definition.provider === "anthropic-compatible"
       ? (definition.baseUrl.endsWith("/v1/messages") ? definition.baseUrl : `${definition.baseUrl}/v1/messages`)
       : (definition.baseUrl.endsWith("/chat/completions") ? definition.baseUrl : `${definition.baseUrl}/chat/completions`);
-    const body = definition.provider === "anthropic-compatible"
-      ? { model: definition.model, max_tokens: 4096, system, messages: [{ role: "user", content: modelInput }] }
-      : { model: definition.model, messages: [{ role: "system", content: system }, { role: "user", content: modelInput }], temperature: 0.2, max_completion_tokens: 4096 };
     const headers: Record<string, string> = { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` };
-    const response = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(body) });
-    if (!response.ok) throw new Error(`模型调用失败：${response.status} ${await response.text()}`);
-    const payload = await response.json() as { choices?: { message?: { content?: string } }[]; content?: { type?: string; text?: string }[] };
-    const rawOutput = definition.provider === "anthropic-compatible" ? payload.content?.filter((item) => item.type === "text").map((item) => item.text).join("\n").trim() : payload.choices?.[0]?.message?.content?.trim();
-    const output = rawOutput?.replace(/^\s*<think>[\s\S]*?<\/think>\s*/i, "").trim();
+    const callModel = async (content: string) => {
+      const body = definition.provider === "anthropic-compatible"
+        ? { model: definition.model, max_tokens: 4096, system, messages: [{ role: "user", content }] }
+        : { model: definition.model, messages: [{ role: "system", content: system }, { role: "user", content }], temperature: 0.2, max_completion_tokens: 4096 };
+      const response = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(body) });
+      if (!response.ok) throw new Error(`模型调用失败：${response.status} ${await response.text()}`);
+      const payload = await response.json() as { choices?: { message?: { content?: string } }[]; content?: { type?: string; text?: string }[] };
+      return (definition.provider === "anthropic-compatible"
+        ? payload.content?.filter((item) => item.type === "text").map((item) => item.text).join("\n").trim()
+        : payload.choices?.[0]?.message?.content?.trim())?.replace(/^\s*<think>[\s\S]*?<\/think>\s*/i, "").trim() ?? "";
+    };
+    let rawOutput = await callModel(modelInput);
+    const toolCall = parseModelToolCall(rawOutput);
+    if (toolCall) {
+      const toolResult = executeModelToolCall(toolCall);
+      appendTrace(task, "TOOL", {
+        status: "running",
+        agentId: assignedAgent.id,
+        skillIds: assignedAgent.skills,
+        modelId: selectedModelId,
+        inputFiles: toolResult.files,
+        detail: `${assignedAgent.id} 执行模型请求的 ${toolCall.name}，读取 ${toolResult.files.length} 个本地素材`,
+      });
+      rawOutput = await callModel(`${modelInput}\n\n---\n\n## 工具执行结果\n\n${toolResult.content}\n\n请基于以上工具结果直接输出最终答案。不要再输出工具调用 XML、工具标签或文件读取请求。`);
+      if (parseModelToolCall(rawOutput)) throw new Error("模型重复请求工具调用，当前 Runtime 仅允许每轮执行一次受控本地读取");
+    }
+    const output = rawOutput;
     if (!output) throw new Error("模型未返回可展示的文本结果");
     const outputPath = `outputs/${task}/result.md`;
     writeControlled(outputPath, `# ${task} 输出\n\n${output}\n`);
